@@ -1,0 +1,20 @@
+[
+  {
+    "name": "traditional wedding guest",
+    "request": {"query": "desi wedding guest, not the bride", "gender": "women", "budget": 6000, "k": 5},
+    "must_include": ["saree", "kurta", "anarkali", "sharara", "wedding"],
+    "must_exclude": ["sports", "office", "formal shirt"]
+  },
+  {
+    "name": "white romantic dinner",
+    "request": {"query": "romantic white dinner outfit", "gender": "women", "k": 5},
+    "required_color": "white",
+    "must_exclude": ["sports"]
+  },
+  {
+    "name": "affordable formal workwear",
+    "request": {"query": "black formal workwear", "gender": "women", "budget": 3000, "k": 5},
+    "must_include": ["formal", "office", "blazer", "shirt", "trouser", "work"],
+    "must_exclude": ["sports"]
+  }
+]
