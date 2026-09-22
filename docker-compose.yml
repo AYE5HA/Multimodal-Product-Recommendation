@@ -7,6 +7,9 @@ services:
       DATA_DIR: /app/data
       ARTIFACT_DIR: /app/data/processed
       PORT: 8000
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-4o-mini}
+      APP_URL: ${APP_URL:-http://localhost:5173}
     volumes:
       - ./data:/app/data
     ports:

@@ -17,7 +17,7 @@ export async function recommendOutfits(payload) {
     try {
       const body = await res.json();
       if (body?.error || body?.message) {
-        message = body.error || body.message;
+        message = body.message || body.error;
       }
     } catch {
       /* ignore parse errors */

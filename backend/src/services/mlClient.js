@@ -13,17 +13,6 @@ const mlClient = axios.create({
 });
 
 /**
- * Forward the OpenRouter key to the ML service when present.
- * The key is never logged or returned to API clients.
- */
-mlClient.interceptors.request.use((req) => {
-  if (config.openRouterApiKey) {
-    req.headers['X-OpenRouter-Api-Key'] = config.openRouterApiKey;
-  }
-  return req;
-});
-
-/**
  * Check whether the ML service is reachable.
  * @returns {Promise<'ok'|'unavailable'>}
  */

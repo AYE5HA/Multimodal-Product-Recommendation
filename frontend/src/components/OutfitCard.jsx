@@ -37,7 +37,13 @@ function ItemThumb({ item }) {
         )}
       </div>
       <figcaption className="outfit-item__caption">
-        <span className="outfit-item__name">{name}</span>
+        {item?.product_url ? (
+          <a className="outfit-item__name" href={item.product_url} target="_blank" rel="noreferrer">
+            {name}
+          </a>
+        ) : (
+          <span className="outfit-item__name">{name}</span>
+        )}
         {item?.category && <span className="outfit-item__cat">{item.category}</span>}
       </figcaption>
     </figure>
@@ -82,6 +88,9 @@ export default function OutfitCard({ outfit, rank }) {
       </div>
 
       <div className="outfit-card__scores">
+        {outfit?.total_price_inr != null && (
+          <p className="outfit-card__price">₹{Number(outfit.total_price_inr).toLocaleString('en-IN')} total</p>
+        )}
         <h4 className="outfit-card__section-label">Score breakdown</h4>
         {SCORE_KEYS.map(({ key, label }) => (
           <ScoreBar key={key} label={label} value={scores[key] ?? scores[`${key}_score`]} />
