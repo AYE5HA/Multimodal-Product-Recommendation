@@ -48,6 +48,24 @@ docker compose up --build
 
 The ML service exposes port 8000, the API 4000, and the frontend 5173. `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` are optional environment variables; the application remains fully functional without them.
 
+## Railway deployment
+
+Railway maps each Compose service to its own service. Create three services from this repository with these Dockerfile paths:
+
+| Railway service | Dockerfile path | Public domain |
+|---|---|---|
+| `ml` | `ml/Dockerfile` | No |
+| `backend` | `backend/Dockerfile` | Yes |
+| `frontend` | `frontend/Dockerfile` | Yes |
+
+Set these Railway variables:
+
+- `ml`: `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `APP_URL`
+- `backend`: `ML_SERVICE_URL=http://${{ml.RAILWAY_PRIVATE_DOMAIN}}:${{ml.PORT}}`, `CORS_ORIGIN=https://${{frontend.RAILWAY_PUBLIC_DOMAIN}}`
+- `frontend`: build variable `VITE_API_URL=https://${{backend.RAILWAY_PUBLIC_DOMAIN}}`
+
+Generate a public domain only for `backend` and `frontend`. The browser cannot access Railway private networking, while backend-to-ML traffic should stay private.
+
 ## Validation
 
 ```sh
