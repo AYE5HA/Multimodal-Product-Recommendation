@@ -4,3 +4,6 @@ pydantic==2.10.4
 python-dotenv==1.0.1
 httpx==0.28.1
 Pillow==11.0.0
+numpy==1.26.4
+torch==2.5.1
+transformers==4.48.3
