@@ -7,10 +7,10 @@ def read(name: str, required: set[str]) -> list[dict[str, str]]:
     with (ROOT / "data" / name).open(encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
         headers = set(reader.fieldnames or [])
+        rows = list(reader)
     missing = required - headers
     if missing:
         raise SystemExit(f"{name} missing columns: {', '.join(sorted(missing))}")
-    rows = list(reader)
     if not rows:
         raise SystemExit(f"{name} is empty")
     print(f"{name}: {len(rows)} rows, valid")
