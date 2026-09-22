@@ -17,6 +17,10 @@ RUN pip install --no-cache-dir -r /app/ml/requirements.txt
 COPY ml/ /app/ml/
 COPY data/ /app/data/
 
+# Build the semantic catalog index into the image so recommendation requests do
+# not perform per-product model inference at runtime.
+RUN python /app/ml/scripts/preprocess.py && python /app/ml/scripts/build_embeddings.py
+
 ENV PYTHONPATH=/app/ml
 ENV DATA_DIR=/app/data
 ENV ARTIFACT_DIR=/app/data/processed
@@ -26,4 +30,4 @@ WORKDIR /app/ml
 EXPOSE 8000
 
 # Note: torch CPU — omit CUDA base image for smaller footprint
-CMD ["uvicorn", "service:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "uvicorn service:app --host 0.0.0.0 --port ${PORT:-8000}"]
