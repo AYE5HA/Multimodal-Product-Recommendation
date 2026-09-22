@@ -1,9 +1,4 @@
-"""Small, deterministic fashion retrieval service.
-
-The service intentionally has no model download in its startup path.  It uses
-TF-IDF text similarity, image colour histograms, and the outfit co-occurrence
-file as an explainable compatibility graph.
-"""
+"""Explainable fashion retrieval and outfit ranking service."""
 from __future__ import annotations
 
 import csv
@@ -16,13 +11,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi import Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 try:
     from PIL import Image
-except ImportError:  # pragma: no cover - colour extraction remains optional
+except ImportError:  # pragma: no cover
     Image = None
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,28 +43,21 @@ def _tfidf(rows: list[str], query: str) -> list[float]:
     if not q:
         return [0.0] * len(rows)
     df = Counter(token for doc in docs for token in set(doc))
+
     def vector(doc: list[str]) -> dict[str, float]:
+        if not doc:
+            return {}
         counts = Counter(doc)
-        return {t: (count / len(doc)) * math.log((1 + len(docs)) / (1 + df[t])) for t, count in counts.items()} if doc else {}
-    qv = vector(q)
-    qnorm = math.sqrt(sum(value * value for value in qv.values())) or 1
+        return {token: (count / len(doc)) * math.log((1 + len(docs)) / (1 + df[token])) for token, count in counts.items()}
+
+    query_vector = vector(q)
+    query_norm = math.sqrt(sum(value * value for value in query_vector.values())) or 1
     scores = []
     for doc in docs:
-        dv = vector(doc)
-        dnorm = math.sqrt(sum(value * value for value in dv.values())) or 1
-        scores.append(sum(qv.get(key, 0) * value for key, value in dv.items()) / (qnorm * dnorm))
+        doc_vector = vector(doc)
+        doc_norm = math.sqrt(sum(value * value for value in doc_vector.values())) or 1
+        scores.append(sum(query_vector.get(key, 0) * value for key, value in doc_vector.items()) / (query_norm * doc_norm))
     return scores
-
-
-def _colour(path: str) -> tuple[int, int, int] | None:
-    if not Image or not path:
-        return None
-    try:
-        with Image.open(IMAGE_ROOT / path) as image:
-            image = image.convert("RGB").resize((1, 1))
-            return tuple(image.getpixel((0, 0)))
-    except (OSError, ValueError):
-        return None
 
 
 def _load() -> None:
@@ -84,9 +71,7 @@ def _load() -> None:
     for outfit in outfits:
         ids = [outfit.get(key) for key in ("hero_id", "second_id", "layer_id", "footwear_id", "accessory_1_id", "accessory_2_id") if outfit.get(key)]
         for left in ids:
-            for right in ids:
-                if left != right:
-                    edges[left].add(right)
+            edges[left].update(right for right in ids if right != left)
     state.update(products=products, by_id=by_id, outfits=outfits, edges=edges, ready=True)
 
 
@@ -97,7 +82,7 @@ async def lifespan(_app: FastAPI):
     state.clear()
 
 
-app = FastAPI(title="Atelier ML service", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="Atelier recommendation service", version="3.0.0", lifespan=lifespan)
 
 
 class RecommendRequest(BaseModel):
@@ -110,79 +95,85 @@ class RecommendRequest(BaseModel):
 
 
 @app.get("/health")
-def health():
-    return {"status": "ok" if state.get("ready") else "starting", "products": len(state.get("products", [])), "outfits": len(state.get("outfits", [])), "features": ["tfidf", "image-colour", "co-occurrence-graph"], "llm_available": bool(os.getenv("OPENROUTER_API_KEY"))}
+def health() -> dict[str, Any]:
+    return {"status": "ok" if state.get("ready") else "starting", "products": len(state.get("products", [])), "outfits": len(state.get("outfits", [])), "features": ["tfidf", "outfit-compatibility-graph", "grounded-explanations"], "llm_available": bool(os.getenv("OPENROUTER_API_KEY"))}
 
 
 def _item(product: dict[str, Any]) -> dict[str, Any]:
-    return {**product, "price_inr": float(product.get("price_inr") or 0), "image_url": product.get("image_url") or f"/data/{product.get('image', '')}"}
+    item = dict(product)
+    item["price_inr"] = float(product.get("price_inr") or 0)
+    item["image_url"] = product.get("image_url") or (f"/data/{product.get('image')}" if product.get("image") else None)
+    return item
 
 
-def _budget_ok(price: float, budget: float | None) -> bool:
-    return budget is None or price <= budget
+def _outfit_items(outfit: dict[str, Any]) -> list[dict[str, Any]]:
+    ids = [outfit.get(key) for key in ("hero_id", "second_id", "layer_id", "footwear_id", "accessory_1_id", "accessory_2_id") if outfit.get(key)]
+    return [_item(state["by_id"][item_id]) for item_id in ids if item_id in state["by_id"]]
 
 
-def _grounded_explanation(query: str, evidence: list[str], request: Request) -> str | None:
-    """Use OpenRouter only when explicitly configured, with catalogue evidence in the prompt."""
-    key = request.headers.get("x-openrouter-api-key") or os.getenv("OPENROUTER_API_KEY")
+def _matches(outfit: dict[str, Any], body: RecommendRequest, items: list[dict[str, Any]]) -> bool:
+    if body.gender and str(outfit.get("gender", "")).lower() not in (body.gender.lower(), "unisex"):
+        return False
+    if body.occasion and body.occasion.lower() not in str(outfit.get("occasion", "")).lower():
+        return False
+    if body.budget is not None and sum(float(item.get("price_inr") or 0) for item in items) > body.budget:
+        return False
+    return bool(items)
+
+
+async def _grounded_explanation(query: str, evidence: list[str], _request: Request) -> str | None:
+    key = os.getenv("OPENROUTER_API_KEY")
     if not key or not evidence:
         return None
     try:
         import httpx
-        response = httpx.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={"model": os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini"), "temperature": 0.2,
-                  "messages": [{"role": "user", "content": f"Explain this fashion recommendation in one sentence. Only use evidence: {evidence}. Query: {query}"}]},
-            timeout=8,
-        )
-        response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"].strip()
+
+        prompt = "Explain this fashion look in one concise sentence. Use only the supplied evidence.\nQuery: " + query + "\nEvidence: " + "; ".join(evidence)
+        async with httpx.AsyncClient(timeout=8) as client:
+            response = await client.post("https://openrouter.ai/api/v1/chat/completions", headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json", "HTTP-Referer": os.getenv("APP_URL", "http://localhost:5173")}, json={"model": os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini"), "temperature": 0.2, "messages": [{"role": "user", "content": prompt}]})
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"].strip()
     except Exception:
         return None
 
 
 @app.post("/recommend")
-def recommend(body: RecommendRequest, request: Request):
+async def recommend(body: RecommendRequest, request: Request) -> dict[str, Any]:
     if not state.get("ready"):
         raise HTTPException(503, "Service not ready")
-    products = state["products"]
     query = " ".join(filter(None, [body.query, body.gender or "", body.occasion or ""]))
-    scores = _tfidf([f"{p.get('name','')} {p.get('category_label','')} {p.get('tags','')} {p.get('description','')}" for p in products], query)
-    ranked = []
-    for product, text_score in zip(products, scores):
-        gender = str(product.get("gender", "")).lower()
-        occasion = str(product.get("occasion", "")).lower()
-        price = float(product.get("price_inr") or 0)
-        if body.gender and body.gender.lower() not in (gender, "unisex"):
+    outfits = state["outfits"]
+    rows = [" ".join(str(outfit.get(key, "")) for key in ("theme", "occasion", "palette", "stylist_rationale", "hero", "second", "layer", "footwear", "accessory_1", "accessory_2")) for outfit in outfits]
+    retrieval_scores = _tfidf(rows, query)
+    candidates: list[tuple[float, dict[str, Any], list[dict[str, Any]], list[str]]] = []
+    for outfit, retrieval in zip(outfits, retrieval_scores):
+        items = _outfit_items(outfit)
+        if not _matches(outfit, body, items):
             continue
-        if body.occasion and body.occasion.lower() not in occasion and body.occasion.lower() not in str(product.get("tags", "")).lower():
-            continue
-        if not _budget_ok(price, body.budget):
-            continue
-        ranked.append((text_score + (0.15 if body.occasion and body.occasion.lower() in occasion else 0), product))
-    ranked.sort(key=lambda pair: pair[0], reverse=True)
+        ids = [str(item.get("id")) for item in items]
+        graph_links = sum(len(state["edges"].get(item_id, set())) for item_id in ids)
+        graph_score = min(1.0, graph_links / max(1, len(ids) * 3))
+        occasion_score = 1.0 if body.occasion and body.occasion.lower() in str(outfit.get("occasion", "")).lower() else 0.5
+        score = min(1.0, (retrieval * 0.60) + (graph_score * 0.25) + (occasion_score * 0.15))
+        evidence = [f"Curated {outfit.get('occasion', 'occasion')} look: {outfit.get('theme', 'coordinated palette')}", f"Compatibility graph connects {len(ids)} catalog items", str(outfit.get("stylist_rationale", "")).strip()]
+        candidates.append((score, outfit, items, [item for item in evidence if item]))
+    candidates.sort(key=lambda item: item[0], reverse=True)
     results = []
-    for score, product in ranked[:body.k]:
-        item = _item(product)
-        graph = sorted(state["edges"].get(str(product.get("id")), []))[:3]
-        evidence = [f"Co-occurs with {state['by_id'][edge].get('name', edge)}" for edge in graph if edge in state["by_id"]]
-        results.append({
-            "id": product.get("id"), "title": product.get("name"), "score": round(min(1, score), 4),
-            "items": [item], "scores": {"retrieval": round(min(1, score), 4), "graph": round(min(1, len(graph) / 3), 4), "color": 0.5, "structure": 0.5},
-            "evidence": evidence,
-            "explanation": _grounded_explanation(body.query, evidence, request) or ("Matched by catalogue language" + (" and outfit co-occurrence evidence." if graph else ".")),
-        })
-    return {"query": body.query, "outfits": results, "rationale": "Deterministic TF-IDF retrieval with graph evidence.", "meta": {"engine": "tfidf+graph", "count": len(results)}}
+    for score, outfit, items, evidence in candidates[: body.k]:
+        graph_score = min(1.0, sum(len(state["edges"].get(str(item.get("id")), set())) for item in items) / max(1, len(items) * 3))
+        explanation = await _grounded_explanation(body.query, evidence, request)
+        results.append({"id": outfit.get("outfit_id"), "title": outfit.get("theme") or outfit.get("hero") or "Curated look", "score": round(score, 4), "items": items, "scores": {"retrieval": round(min(1.0, score / 0.85), 4), "graph": round(graph_score, 4), "color": 0.5, "structure": round(min(1.0, len(items) / 5), 4)}, "evidence": evidence, "explanation": explanation or str(outfit.get("stylist_rationale") or "Ranked from catalog similarity and item compatibility evidence."), "total_price_inr": round(sum(item["price_inr"] for item in items), 2)})
+    return {"query": body.query, "outfits": results, "rationale": "Curated outfit graph retrieval with lexical matching and compatibility evidence.", "meta": {"engine": "tfidf+outfit-graph", "count": len(results), "catalog_size": len(state["products"])} }
 
 
 @app.get("/catalog/products")
-def catalog_products(limit: int = Query(40, ge=1, le=200), gender: str | None = None, slot: str | None = None):
+def catalog_products(limit: int = Query(40, ge=1, le=200), gender: str | None = None, slot: str | None = None) -> dict[str, Any]:
     items = []
     for product in state.get("products", []):
         if gender and str(product.get("gender", "")).lower() not in (gender.lower(), "unisex"):
             continue
-        if slot and str(product.get("slot") or product.get("category", "")).lower() != slot.lower():
+        product_slot = str(product.get("slot") or product.get("category", "")).lower()
+        if slot and slot.lower() not in product_slot:
             continue
         items.append(_item(product))
         if len(items) == limit:
@@ -191,11 +182,12 @@ def catalog_products(limit: int = Query(40, ge=1, le=200), gender: str | None = 
 
 
 @app.get("/catalog/stats")
-def catalog_stats():
+def catalog_stats() -> dict[str, Any]:
     products = state.get("products", [])
     return {"total": len(products), "outfits": len(state.get("outfits", [])), "by_gender": dict(Counter(str(p.get("gender", "unknown")).lower() for p in products)), "by_slot": dict(Counter(str(p.get("slot") or p.get("category", "unknown")).lower() for p in products))}
 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
