@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Validate and preprocess dataset
+        run: |
+          python ml/scripts/ingest_dataset.py
+          python ml/scripts/preprocess.py
+          python -m py_compile ml/service.py ml/scripts/*.py
+      - name: Build backend dependencies
+        run: npm ci --prefix backend
+      - name: Build frontend
+        run: |
+          npm ci --prefix frontend
+          npm run --prefix frontend build
