@@ -1,0 +1,24 @@
+{
+  "name": "multimodal-product-recommendation-api",
+  "version": "1.0.0",
+  "description": "Public API gateway for Multimodal Product Recommendation — proxies to the Python ML service",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "helmet": "^8.0.0",
+    "morgan": "^1.10.0",
+    "zod": "^3.24.1"
+  },
+  "private": true
+}
