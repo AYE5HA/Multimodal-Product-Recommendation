@@ -21,6 +21,9 @@ def main() -> None:
         except ValueError:
             product["price_inr"] = 0.0
         product["id"] = product.get("id", "").strip()
+        # Do not preserve stale remote URLs from older catalog exports; the
+        # running app serves the checked-in image asset from /data.
+        product["image_url"] = ""
         product["text"] = " ".join(tokens(" ".join(product.get(key, "") for key in ("name", "category_label", "tags", "description"))))
         catalog.append(product)
     (OUT / "catalog.json").write_text(json.dumps(catalog, indent=2), encoding="utf-8")
