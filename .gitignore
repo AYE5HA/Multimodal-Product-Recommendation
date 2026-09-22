@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+data/processed/*
+!data/processed/.gitkeep
+venv/
+fashion_env/
+*.pkl
+*.npy
+.DS_Store
